@@ -1,15 +1,22 @@
+from datetime import datetime
 from typing import List, Optional
 
-from OpenSSL.crypto import (
-    X509Store,
-    X509StoreContext,
-    X509StoreContextError,
-    load_certificate,
-    FILETYPE_ASN1,
+from .certificate_chain_verifier import (
+    CertificateChainVerificationError,
+    verify_certificate_chain,
 )
-
 from .exceptions import InvalidCertificateChain
-from .pem_cert_bytes_to_open_ssl_x509 import pem_cert_bytes_to_open_ssl_x509
+
+
+def _get_verification_time() -> Optional[datetime]:
+    """Return the fixed instant to validate certificate validity against.
+
+    Returning ``None`` means validation uses the current system time. Tests
+    patch this function to pin verification to a point in the past so that
+    certificates captured in test fixtures can still be fully validated after
+    their real-world expiration.
+    """
+    return None
 
 
 def validate_certificate_chain(
@@ -28,68 +35,26 @@ def validate_certificate_chain(
         `helpers.exceptions.InvalidCertificateChain` if chain cannot be validated
     """
     if pem_root_certs_bytes is None or len(pem_root_certs_bytes) < 1:
-        # We have no root certs to chain back to, so just pass on validation
+        # We have no root certs to chain back to, so just pass on validation.
+        # This preserves the library's long-standing behavior: with no trust
+        # anchors configured there is nothing to validate against, and the
+        # attestation format verifiers are responsible for their own root
+        # pinning. No chain has been validated when this returns.
         return True
 
     # Make sure we have at least one certificate to try and link back to a root cert
     if len(x5c) < 1:
         raise InvalidCertificateChain("x5c was empty")
 
-    # Prepare leaf cert
     try:
-        leaf_cert_bytes = x5c[0]
-        leaf_cert = load_certificate(FILETYPE_ASN1, leaf_cert_bytes)
-    except Exception as exc:
-        raise InvalidCertificateChain(
-            "Could not prepare leaf cert. See __cause__ for more info"
-        ) from exc
-
-    # Prepare any intermediate certs
-    try:
-        # May be an empty array, that's fine
-        intermediate_certs_bytes = x5c[1:]
-        intermediate_certs = [
-            load_certificate(FILETYPE_ASN1, cert) for cert in intermediate_certs_bytes
-        ]
-    except Exception as exc:
-        raise InvalidCertificateChain(
-            "Could not prepare intermediate certs. See __cause__ for more info"
-        ) from exc
-
-    # Prepare a collection of possible root certificates
-    cert_store = _generate_new_cert_store()
-    try:
-        for cert in pem_root_certs_bytes:
-            cert_store.add_cert(pem_cert_bytes_to_open_ssl_x509(cert))
-    except Exception as exc:
-        raise InvalidCertificateChain(
-            "Could not prepare root certs. See __cause__ for more info"
-        ) from exc
-
-    # Load certs into a "context" for validation
-    context = X509StoreContext(
-        store=cert_store,
-        certificate=leaf_cert,
-        chain=intermediate_certs,
-    )
-
-    # Validate the chain (will raise if it can't)
-    try:
-        context.verify_certificate()
-    except X509StoreContextError as exc:
+        verify_certificate_chain(
+            x5c=x5c,
+            pem_root_certs_bytes=pem_root_certs_bytes,
+            verification_time=_get_verification_time(),
+        )
+    except CertificateChainVerificationError as exc:
         raise InvalidCertificateChain(
             "Certificate chain could not be validated. See __cause__ for more info"
         ) from exc
 
     return True
-
-
-def _generate_new_cert_store() -> X509Store:
-    """
-    Something that can be patched during testing to return an X509Store instance with its time
-    adjusted to some datetime in the past. This allows full certificate validity checks even after
-    cert expiration in the real world. See here:
-
-    https://www.pyopenssl.org/en/stable/api/crypto.html#OpenSSL.crypto.X509Store.set_time
-    """
-    return X509Store()

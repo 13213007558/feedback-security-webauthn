@@ -1,5 +1,5 @@
 import hashlib
-from typing import List, cast
+from typing import List
 
 from pyasn1.type.univ import OctetString
 from pyasn1.codec.ber.decoder import decode as ber_decode
@@ -7,13 +7,6 @@ from pyasn1_modules.rfc5280 import Certificate
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from OpenSSL.crypto import (
-    _PublicKey,
-    load_certificate,
-    dump_certificate,
-    FILETYPE_PEM,
-    FILETYPE_ASN1,
-)
 
 from webauthn.helpers import (
     decode_credential_public_key,
@@ -22,6 +15,7 @@ from webauthn.helpers import (
     validate_certificate_chain,
     verify_signature,
 )
+from webauthn.helpers.cert_loader import load_x509_cert_with_ber_fallback
 from webauthn.helpers.asn1.android_key import (
     AuthorizationList,
     KeyDescription,
@@ -73,8 +67,8 @@ def verify_android_key(
     x5c_root_cert = attestation_statement.x5c[-1]
 
     try:
-        x5c_root_cert_openssl = load_certificate(FILETYPE_ASN1, x5c_root_cert)
-        x5c_root_cert_pem = dump_certificate(FILETYPE_PEM, x5c_root_cert_openssl)
+        x5c_root_cert_crypto = load_x509_cert_with_ber_fallback(x5c_root_cert).cert
+        x5c_root_cert_pem = x5c_root_cert_crypto.public_bytes(Encoding.PEM)
     except Exception as exc:
         raise InvalidRegistrationResponse(
             "Could not parse x5c root certificate. See __cause__ for more info (Android Key)"
@@ -121,11 +115,10 @@ def verify_android_key(
     # algorithm specified in alg.
     try:
         attestation_cert_bytes = attestation_statement.x5c[0]
-        attestation_cert = load_certificate(FILETYPE_ASN1, attestation_cert_bytes)
-        attestation_cert_pub_key = attestation_cert.get_pubkey().to_cryptography_key()
-        # to_cryptography_key() is of type _Key which includes _PrivateKey types as well. But we
-        # know this is the _PublicKey subset of _Key so help type checking understand that
-        attestation_cert_pub_key = cast(_PublicKey, attestation_cert_pub_key)
+        attestation_cert = load_x509_cert_with_ber_fallback(
+            attestation_cert_bytes
+        ).cert
+        attestation_cert_pub_key = attestation_cert.public_key()
     except Exception as exc:
         raise InvalidRegistrationResponse(
             "Could not parse attestation certificate public key. See __cause__ for more info (Android Key)"

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changes:**
+
+- Attestation certificate chain validation no longer depends on `pyOpenSSL`. Chain verification is now implemented with public `cryptography` primitives, preserving the previous validity-window, basic-constraints, path-length, key-usage, critical-extension, name-constraint, issuer-signature and trusted-root-boundary checks. `pyOpenSSL` has been removed from the package dependencies.
+
 ## v3.0.1
 
 **Changes:**

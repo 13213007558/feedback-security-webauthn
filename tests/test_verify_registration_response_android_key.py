@@ -1,6 +1,6 @@
 from unittest import TestCase
 from datetime import datetime
-from OpenSSL.crypto import X509Store
+from typing import Callable
 
 from webauthn.helpers import base64url_to_bytes
 from webauthn.helpers.structs import AttestationFormat
@@ -13,7 +13,7 @@ class TestVerifyRegistrationResponseAndroidKey(TestCase):
     @patch_validate_certificate_chain_x509store_getter
     def test_verify_attestation_android_key_hardware_authority(
         self,
-        patched_x509store: X509Store,
+        set_verification_time: Callable[[datetime], None],
     ) -> None:
         """
         This android-key attestation was generated on a Pixel 8a in January 2025 via an origin
@@ -47,7 +47,7 @@ class TestVerifyRegistrationResponseAndroidKey(TestCase):
         # (Int.) 20241209062853Z <-> 20250217062852Z
         # (Int.) 20220126224945Z <-> 20370122224945Z
         # (Root) 20191122203758Z <-> 20341118203758Z
-        patched_x509store.set_time(datetime(2025, 1, 8, 0, 0, 0))
+        set_verification_time(datetime(2025, 1, 8, 0, 0, 0))
 
         verification = verify_registration_response(
             credential=credential,
@@ -64,7 +64,7 @@ class TestVerifyRegistrationResponseAndroidKey(TestCase):
     @patch_validate_certificate_chain_x509store_getter
     def test_verify_attestation_android_key_root_5(
         self,
-        patched_x509store: X509Store,
+        set_verification_time: Callable[[datetime], None],
     ) -> None:
         """
         This android-key attestation was generated on a Pixel via webauthn.io in April 2026
@@ -97,7 +97,7 @@ class TestVerifyRegistrationResponseAndroidKey(TestCase):
         # (Int.) 20260326164138Z <-> 20260604164137Z
         # (Int.) 20260209195918Z <-> 20290208195918Z
         # (Root) 20250717223218Z <-> 20350715223218Z
-        patched_x509store.set_time(datetime(2026, 4, 26, 0, 0, 0))
+        set_verification_time(datetime(2026, 4, 26, 0, 0, 0))
 
         verification = verify_registration_response(
             credential=credential,

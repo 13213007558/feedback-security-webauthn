@@ -1,7 +1,6 @@
 from unittest import TestCase
 from datetime import datetime
-
-from OpenSSL.crypto import X509Store
+from typing import Callable
 
 from webauthn.helpers import base64url_to_bytes
 from webauthn.helpers.structs import AttestationFormat
@@ -14,13 +13,13 @@ class TestVerifyRegistrationResponseApple(TestCase):
     @patch_validate_certificate_chain_x509store_getter
     def test_verify_attestation_apple_passkey(
         self,
-        patched_x509store: X509Store,
+        set_verification_time: Callable[[datetime], None],
     ) -> None:
         # Setting the time to something that satisfies all these:
         # (Leaf) 20210831230207Z <-> 20210903230207Z <- Earliest expiration
         # (Int.) 20200318183801Z <-> 20300313000000Z
         # (Root) 20200318182132Z <-> 20450315000000Z
-        patched_x509store.set_time(datetime(2021, 9, 1, 0, 0, 0))
+        set_verification_time(datetime(2021, 9, 1, 0, 0, 0))
 
         credential = """{
             "id": "0yhsKG_gCzynIgNbvXWkqJKL8Uc",

@@ -1,0 +1,13 @@
+cbor2==6.2.1
+cffi==2.1.1
+cryptography==50.0.2
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+pyasn1==0.6.5
+pyasn1-modules==0.4.2
+pycparser==3.12
+pygments==2.21.0
+pyopenssl==26.4.0
+pytest==9.2.0
+typing-extensions==4.16.0

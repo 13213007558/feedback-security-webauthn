@@ -1,11 +1,11 @@
 import hashlib
 from typing import List, cast
-
 from pyasn1.type.univ import OctetString
 from pyasn1.codec.ber.decoder import decode as ber_decode
 from pyasn1_modules.rfc5280 import Certificate
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from OpenSSL.crypto import (
     _PublicKey,
@@ -16,6 +16,7 @@ from OpenSSL.crypto import (
 )
 
 from webauthn.helpers import (
+    attestation_type_from_chain,
     decode_credential_public_key,
     decoded_public_key_to_cryptography,
     parse_cbor,
@@ -38,7 +39,11 @@ from webauthn.helpers.known_root_certs import (
     google_hardware_attestation_root_4,
     google_hardware_attestation_root_5,
 )
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 
 
 def verify_android_key(
@@ -48,7 +53,7 @@ def verify_android_key(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
-) -> bool:
+) -> AttestationVerificationResult:
     """Verify an "android-key" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-android-key-attestation
@@ -80,7 +85,9 @@ def verify_android_key(
             "Could not parse x5c root certificate. See __cause__ for more info (Android Key)"
         ) from exc
 
-    # Make sure x509 forms a complete, valid cert chain
+    # Make sure x509 forms a complete, valid cert chain. The x5c root here is a
+    # client-supplied certificate, not a configured trust anchor: linking the leaf to it only
+    # confirms internal chain consistency and never establishes trust root confidence.
     try:
         validate_certificate_chain(
             x5c=x5c_no_root,
@@ -89,16 +96,35 @@ def verify_android_key(
     except InvalidCertificateChain as err:
         raise InvalidRegistrationResponse(f"{err} (Android Key)")
 
-    # Make sure the root cert is one of these:
-    pem_root_certs_bytes.append(google_hardware_attestation_root_2)
-    pem_root_certs_bytes.append(google_hardware_attestation_root_3)
-    pem_root_certs_bytes.append(google_hardware_attestation_root_4)
-    pem_root_certs_bytes.append(google_hardware_attestation_root_5)
+    # Make sure the root cert is one of these configured/known roots. Only at this point is a
+    # genuine trust anchor involved, and the client certificate cannot add itself here.
+    known_root_certs_bytes = [
+        google_hardware_attestation_root_2,
+        google_hardware_attestation_root_3,
+        google_hardware_attestation_root_4,
+        google_hardware_attestation_root_5,
+    ]
+    # Preserve any custom roots the Relying Party configured for this format
+    known_root_certs_bytes.extend(pem_root_certs_bytes)
 
-    if x5c_root_cert_pem not in pem_root_certs_bytes:
+    if x5c_root_cert_pem not in known_root_certs_bytes:
         raise InvalidRegistrationResponse(
             "x5c root certificate was not a known root certificate (Android Key)"
         )
+
+    # The x5c root matched a configured trust anchor, so report its fingerprint as the
+    # verified root.
+    trust_root_cert = load_certificate(FILETYPE_PEM, x5c_root_cert_pem)
+    trust_root_fingerprint = (
+        trust_root_cert.to_cryptography()
+        .fingerprint(hashes.SHA256())
+        .hex(":")
+        .upper()
+    )
+    chain_validation = CertificateChainValidation(
+        trust_root_verified=True,
+        trust_root_fingerprint=trust_root_fingerprint,
+    )
 
     # Extract attStmt bytes from attestation_object
     attestation_dict = parse_cbor(attestation_object)
@@ -238,4 +264,8 @@ def verify_android_key(
             f"teeEnforced.purpose {purpose} was not [{KeyPurpose.SIGN}]"
         )
 
-    return True
+    return AttestationVerificationResult(
+        attestation_type=attestation_type_from_chain(chain_validation),
+        trust_root_verified=chain_validation.trust_root_verified,
+        trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+    )

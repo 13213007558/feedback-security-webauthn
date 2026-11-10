@@ -7,6 +7,91 @@ from .cose import COSEAlgorithmIdentifier
 
 ################
 #
+# Attestation trust
+#
+################
+
+
+class AttestationType(str, Enum):
+    """The kind of attestation a registration response actually provided, based on the
+    verification that was completed rather than on the attestation format name.
+
+    Members:
+        `NONE`: No attestation statement was provided ("none" format). Signature and
+            certificate chain verification did not take place, so nothing about the device's
+            provenance is established.
+        `SELF`: Self attestation. The attestation signature was verified against the credential
+            public key itself. This proves possession of the credential private key but provides
+            no attestation by a separate authority.
+        `BASIC`: An attestation certificate was used and the attestation signature was verified,
+            but no chain to a configured trust root could be established. The statement is
+            structurally valid but its source is not trusted.
+        `ATT_CA`: The attestation certificate chain was verified against a configured trust
+            root, in addition to the attestation signature being verified.
+
+    https://www.w3.org/TR/webauthn-2/#sctn-attestation-types
+    """
+
+    NONE = "none"
+    SELF = "self"
+    BASIC = "basic"
+    ATT_CA = "attca"
+
+
+class AttestationPolicy(str, Enum):
+    """A Relying Party policy for which attestation outcomes are acceptable. The selected
+    policy is enforced before `verify_registration_response()` returns successfully.
+
+    Members:
+        `ALLOW_NONE`: Accept any response whose format-specific verification passes, including
+            "none" attestation, self attestation, and unverified certificate chains. This is the
+            default and preserves the historical behavior of the library.
+        `ALLOW_SELF`: Reject "none" attestation. Accept self attestation and certificate-based
+            attestation, including chains that do not reach a configured trust root.
+        `REQUIRE_TRUSTED_ROOT`: Require the attestation certificate chain to verify against a
+            configured (or format-built-in) trust root. "none", self attestation, and
+            unverified chains are all rejected.
+    """
+
+    ALLOW_NONE = "allow_none"
+    ALLOW_SELF = "allow_self"
+    REQUIRE_TRUSTED_ROOT = "require_trusted_root"
+
+
+@dataclass
+class CertificateChainValidation:
+    """The outcome of attempting to validate an attestation certificate chain.
+
+    Attributes:
+        `trust_root_verified`: Whether the chain was verified against a trust root that the
+            Relying Party configured (or that is built into the attestation format). This is
+            `False` when no trust root was available, in which case chain validation is skipped
+            and must not be treated as confirmed root trust.
+        `trust_root_fingerprint`: The SHA-256 fingerprint (colon-separated uppercase hex) of the
+            trust anchor that completed the chain, or `None` when no trust root was verified.
+    """
+
+    trust_root_verified: bool = False
+    trust_root_fingerprint: Optional[str] = None
+
+
+@dataclass
+class AttestationVerificationResult:
+    """The attestation-specific result of a format verifier.
+
+    Attributes:
+        `attestation_type`: The kind of attestation that was actually verified
+        `trust_root_verified`: Whether a chain to a configured trust root was established
+        `trust_root_fingerprint`: SHA-256 fingerprint of the trust anchor, when one was used
+    """
+
+    attestation_type: AttestationType
+    trust_root_verified: bool = False
+    trust_root_fingerprint: Optional[str] = None
+
+
+################
+#
 # Fundamental data structures
 #
 ################

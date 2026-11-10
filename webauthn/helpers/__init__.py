@@ -1,4 +1,5 @@
 from .aaguid_to_string import aaguid_to_string
+from .attestation_type_from_chain import attestation_type_from_chain
 from .base64url_to_bytes import base64url_to_bytes
 from .bytes_to_base64url import bytes_to_base64url
 from .byteslike_to_bytes import byteslike_to_bytes
@@ -25,6 +26,7 @@ from .verify_signature import verify_signature
 
 __all__ = [
     "aaguid_to_string",
+    "attestation_type_from_chain",
     "base64url_to_bytes",
     "bytes_to_base64url",
     "byteslike_to_bytes",

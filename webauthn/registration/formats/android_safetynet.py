@@ -10,6 +10,7 @@ from cryptography.x509.oid import NameOID
 
 from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from webauthn.helpers import (
+    attestation_type_from_chain,
     base64url_to_bytes,
     parse_cbor,
     validate_certificate_chain,
@@ -21,7 +22,11 @@ from webauthn.helpers.exceptions import (
     InvalidRegistrationResponse,
 )
 from webauthn.helpers.known_root_certs import globalsign_root_ca
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 
 
 @dataclass
@@ -56,7 +61,7 @@ def verify_android_safetynet(
     client_data_json: bytes,
     pem_root_certs_bytes: List[bytes],
     verify_timestamp_ms: bool = True,
-) -> bool:
+) -> AttestationVerificationResult:
     """Verify an "android-safetynet" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-android-safetynet-attestation
@@ -161,10 +166,11 @@ def verify_android_safetynet(
     # Validate certificate chain
     try:
         # Include known root certificates for this attestation format with whatever
-        # other certs were provided
+        # other certs were provided. The built-in GlobalSign root anchors the chain, so a
+        # successful validation confirms a configured trust root.
         pem_root_certs_bytes.append(globalsign_root_ca)
 
-        validate_certificate_chain(
+        chain_validation: CertificateChainValidation = validate_certificate_chain(
             x5c=x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
@@ -193,4 +199,8 @@ def verify_android_safetynet(
             "Could not verify attestation statement signature (Packed)"
         )
 
-    return True
+    return AttestationVerificationResult(
+        attestation_type=attestation_type_from_chain(chain_validation),
+        trust_root_verified=chain_validation.trust_root_verified,
+        trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+    )

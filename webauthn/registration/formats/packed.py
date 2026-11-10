@@ -5,6 +5,7 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 
 from webauthn.helpers import (
+    attestation_type_from_chain,
     decode_credential_public_key,
     decoded_public_key_to_cryptography,
     parse_cbor,
@@ -15,7 +16,12 @@ from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
     InvalidRegistrationResponse,
 )
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationType,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 
 
 def verify_packed(
@@ -25,7 +31,7 @@ def verify_packed(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
-) -> bool:
+) -> AttestationVerificationResult:
     """Verify a "packed" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation
@@ -53,9 +59,11 @@ def verify_packed(
     )
 
     if attestation_statement.x5c:
-        # Validate the certificate chain
+        # Validate the certificate chain. When no trust root is available chain validation is
+        # skipped and reports trust_root_verified=False, so a structurally valid chain without a
+        # configured root is reported as basic rather than trusted attestation.
         try:
-            validate_certificate_chain(
+            chain_validation: CertificateChainValidation = validate_certificate_chain(
                 x5c=attestation_statement.x5c,
                 pem_root_certs_bytes=pem_root_certs_bytes,
             )
@@ -77,27 +85,34 @@ def verify_packed(
             raise InvalidRegistrationResponse(
                 "Could not verify attestation statement signature (Packed)"
             )
-    else:
-        # Self Attestation
-        decoded_pub_key = decode_credential_public_key(credential_public_key)
 
-        if decoded_pub_key.alg != attestation_statement.alg:
-            raise InvalidRegistrationResponse(
-                f"Credential public key alg {decoded_pub_key.alg} did not equal attestation statement alg {attestation_statement.alg}"
-            )
+        return AttestationVerificationResult(
+            attestation_type=attestation_type_from_chain(chain_validation),
+            trust_root_verified=chain_validation.trust_root_verified,
+            trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+        )
 
-        public_key = decoded_public_key_to_cryptography(decoded_pub_key)
+    # Self Attestation: the credential key vouches for itself, so there is no certificate and
+    # no trust root to chain to.
+    decoded_pub_key = decode_credential_public_key(credential_public_key)
 
-        try:
-            verify_signature(
-                public_key=public_key,
-                signature_alg=attestation_statement.alg,
-                signature=attestation_statement.sig,
-                data=verification_data,
-            )
-        except InvalidSignature:
-            raise InvalidRegistrationResponse(
-                "Could not verify attestation statement signature (Packed|Self)"
-            )
+    if decoded_pub_key.alg != attestation_statement.alg:
+        raise InvalidRegistrationResponse(
+            f"Credential public key alg {decoded_pub_key.alg} did not equal attestation statement alg {attestation_statement.alg}"
+        )
 
-    return True
+    public_key = decoded_public_key_to_cryptography(decoded_pub_key)
+
+    try:
+        verify_signature(
+            public_key=public_key,
+            signature_alg=attestation_statement.alg,
+            signature=attestation_statement.sig,
+            data=verification_data,
+        )
+    except InvalidSignature:
+        raise InvalidRegistrationResponse(
+            "Could not verify attestation statement signature (Packed|Self)"
+        )
+
+    return AttestationVerificationResult(attestation_type=AttestationType.SELF)

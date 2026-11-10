@@ -16,6 +16,9 @@ from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from webauthn.helpers.exceptions import InvalidRegistrationResponse
 from webauthn.helpers.structs import (
     AttestationFormat,
+    AttestationPolicy,
+    AttestationType,
+    AttestationVerificationResult,
     ClientDataType,
     CredentialDeviceType,
     PublicKeyCredentialType,
@@ -44,6 +47,14 @@ class VerifiedRegistration:
         `credential_type`: The literal string "public-key"
         `user_verified`: Whether the user was verified by the authenticator
         `attestation_object`: The raw attestation object for later scrutiny
+        `attestation_type`: The kind of attestation actually established by verification
+            (none/self/basic/attca). This reflects the verification performed, not the format
+        `trust_root_verified`: Whether the attestation chain was verified against a configured
+            (or format-built-in) trust root
+        `trust_root_fingerprint`: SHA-256 fingerprint (colon-separated uppercase hex) of the
+            trust anchor that completed the chain, or `None` when no trust root was verified
+        `credential_device_type`: Whether the credential is single-device or multi-device
+        `credential_backed_up`: Whether the credential is currently backed up
     """
 
     credential_id: bytes
@@ -56,6 +67,9 @@ class VerifiedRegistration:
     attestation_object: bytes
     credential_device_type: CredentialDeviceType
     credential_backed_up: bool
+    attestation_type: AttestationType = AttestationType.NONE
+    trust_root_verified: bool = False
+    trust_root_fingerprint: Optional[str] = None
 
 
 expected_token_binding_statuses = [
@@ -74,6 +88,7 @@ def verify_registration_response(
     require_user_verification: bool = False,
     supported_pub_key_algs: List[COSEAlgorithmIdentifier] = default_supported_pub_key_algs,
     pem_root_certs_bytes_by_fmt: Optional[Mapping[AttestationFormat, List[bytes]]] = None,
+    attestation_policy: AttestationPolicy = AttestationPolicy.ALLOW_NONE,
 ) -> VerifiedRegistration:
     """Verify an authenticator's response to navigator.credentials.create()
 
@@ -94,17 +109,22 @@ def verify_registration_response(
           restrict support to. Defaults to all supported algorithm IDs.
         - (optional) `pem_root_certs_bytes_by_fmt`: A list of root certificates, in PEM format, to
           be used to validate the certificate chains for specific attestation statement formats.
+          Roots remain isolated per attestation format, and client-supplied x5c certificates can
+          never act as additional trust roots.
+        - (optional) `attestation_policy`: The attestation outcomes the RP is willing to accept.
+          The policy is enforced before this method returns successfully. Defaults to
+          `AttestationPolicy.ALLOW_NONE` to preserve historical behavior.
 
     Returns:
-        Information about the authenticator and registration
+        Information about the authenticator and registration, including the attestation type
+        actually established and whether a trust root was verified
 
     Raises:
-        `helpers.exceptions.InvalidRegistrationResponse` if the response cannot be verified
+        `helpers.exceptions.InvalidRegistrationResponse` if the response cannot be verified, or if
+        the established attestation does not satisfy `attestation_policy`
     """
     if isinstance(credential, str) or isinstance(credential, dict):
         credential = parse_registration_credential_json(credential)
-
-    verified = False
 
     # FIDO-specific check
     if bytes_to_base64url(credential.raw_id) != credential.id:
@@ -228,10 +248,11 @@ def verify_registration_response(
                 "None attestation had unexpected attestation statement"
             )
 
-        # There's nothing else to verify, so mark the verification successful
-        verified = True
+        # There's nothing else to verify. No signature or chain was checked, so no trust is
+        # established and this must never be reported as a verified trust root.
+        attestation_result = AttestationVerificationResult(attestation_type=AttestationType.NONE)
     elif attestation_object.fmt == AttestationFormat.FIDO_U2F:
-        verified = verify_fido_u2f(
+        attestation_result = verify_fido_u2f(
             attestation_statement=attestation_object.att_stmt,
             client_data_json=client_data_bytes,
             rp_id_hash=auth_data.rp_id_hash,
@@ -241,7 +262,7 @@ def verify_registration_response(
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
     elif attestation_object.fmt == AttestationFormat.PACKED:
-        verified = verify_packed(
+        attestation_result = verify_packed(
             attestation_statement=attestation_object.att_stmt,
             attestation_object=attestation_object_bytes,
             client_data_json=client_data_bytes,
@@ -249,7 +270,7 @@ def verify_registration_response(
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
     elif attestation_object.fmt == AttestationFormat.TPM:
-        verified = verify_tpm(
+        attestation_result = verify_tpm(
             attestation_statement=attestation_object.att_stmt,
             attestation_object=attestation_object_bytes,
             client_data_json=client_data_bytes,
@@ -257,7 +278,7 @@ def verify_registration_response(
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
     elif attestation_object.fmt == AttestationFormat.APPLE:
-        verified = verify_apple(
+        attestation_result = verify_apple(
             attestation_statement=attestation_object.att_stmt,
             attestation_object=attestation_object_bytes,
             client_data_json=client_data_bytes,
@@ -265,14 +286,14 @@ def verify_registration_response(
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
     elif attestation_object.fmt == AttestationFormat.ANDROID_SAFETYNET:
-        verified = verify_android_safetynet(
+        attestation_result = verify_android_safetynet(
             attestation_statement=attestation_object.att_stmt,
             attestation_object=attestation_object_bytes,
             client_data_json=client_data_bytes,
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
     elif attestation_object.fmt == AttestationFormat.ANDROID_KEY:
-        verified = verify_android_key(
+        attestation_result = verify_android_key(
             attestation_statement=attestation_object.att_stmt,
             attestation_object=attestation_object_bytes,
             client_data_json=client_data_bytes,
@@ -285,10 +306,22 @@ def verify_registration_response(
             f'Unsupported attestation type "{attestation_object.fmt}"'
         )
 
-    # If we got this far and still couldn't verify things then raise an error instead
-    # of simply returning False
-    if not verified:
-        raise InvalidRegistrationResponse("Attestation statement could not be verified")
+    # Enforce the RP's attestation policy only after format-specific verification has reported
+    # the trust it actually established. Callers never need to infer trust from fmt or an
+    # exception.
+    if attestation_policy == AttestationPolicy.REQUIRE_TRUSTED_ROOT:
+        if not attestation_result.trust_root_verified:
+            raise InvalidRegistrationResponse(
+                f'Attestation policy "{attestation_policy.value}" required a verified trust '
+                f'root, but attestation was "{attestation_result.attestation_type.value}"'
+            )
+    elif attestation_policy == AttestationPolicy.ALLOW_SELF:
+        if attestation_result.attestation_type == AttestationType.NONE:
+            raise InvalidRegistrationResponse(
+                f'Attestation policy "{attestation_policy.value}" rejected a "none" '
+                "attestation statement"
+            )
+    # AttestationPolicy.ALLOW_NONE accepts anything that passed format verification.
 
     parsed_backup_flags = parse_backup_flags(auth_data.flags)
 
@@ -303,4 +336,7 @@ def verify_registration_response(
         attestation_object=attestation_object_bytes,
         credential_device_type=parsed_backup_flags.credential_device_type,
         credential_backed_up=parsed_backup_flags.credential_backed_up,
+        attestation_type=attestation_result.attestation_type,
+        trust_root_verified=attestation_result.trust_root_verified,
+        trust_root_fingerprint=attestation_result.trust_root_fingerprint,
     )

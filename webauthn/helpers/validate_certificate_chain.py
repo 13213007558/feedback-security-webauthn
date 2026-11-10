@@ -7,16 +7,18 @@ from OpenSSL.crypto import (
     load_certificate,
     FILETYPE_ASN1,
 )
+from cryptography.hazmat.primitives import hashes
 
 from .exceptions import InvalidCertificateChain
 from .pem_cert_bytes_to_open_ssl_x509 import pem_cert_bytes_to_open_ssl_x509
+from .structs import CertificateChainValidation
 
 
 def validate_certificate_chain(
     *,
     x5c: List[bytes],
     pem_root_certs_bytes: Optional[List[bytes]] = None,
-) -> bool:
+) -> CertificateChainValidation:
     """Validate that the certificates in x5c chain back to a known root certificate
 
     Args:
@@ -24,12 +26,22 @@ def validate_certificate_chain(
         (optional) `pem_root_certs_bytes`: Any additional (PEM-formatted)
         root certificates that may complete the certificate chain
 
+    Returns:
+        A `CertificateChainValidation` describing whether a trust root was actually
+        established. When no root certificates are provided the chain cannot be anchored, so
+        `trust_root_verified` is `False` and no fingerprint is reported: the successful return
+        of this helper must not be treated as confirmed root trust.
+
     Raises:
         `helpers.exceptions.InvalidCertificateChain` if chain cannot be validated
     """
     if pem_root_certs_bytes is None or len(pem_root_certs_bytes) < 1:
-        # We have no root certs to chain back to, so just pass on validation
-        return True
+        # We have no root certs to chain back to, so skip validation entirely. Report that no
+        # trust root was verified rather than pretending the chain is trusted.
+        return CertificateChainValidation(
+            trust_root_verified=False,
+            trust_root_fingerprint=None,
+        )
 
     # Make sure we have at least one certificate to try and link back to a root cert
     if len(x5c) < 1:
@@ -81,7 +93,17 @@ def validate_certificate_chain(
             "Certificate chain could not be validated. See __cause__ for more info"
         ) from exc
 
-    return True
+    # The trust anchor is the final certificate in the verified chain. Only certificates from
+    # the configured store can appear here, so a client-supplied x5c certificate can never
+    # introduce a new trust root.
+    verified_chain = context.get_verified_chain()
+    trust_anchor = verified_chain[-1]
+    trust_root_fingerprint = trust_anchor.to_cryptography().fingerprint(hashes.SHA256())
+
+    return CertificateChainValidation(
+        trust_root_verified=True,
+        trust_root_fingerprint=trust_root_fingerprint.hex(":").upper(),
+    )
 
 
 def _generate_new_cert_store() -> X509Store:

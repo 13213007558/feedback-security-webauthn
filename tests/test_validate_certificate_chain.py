@@ -41,13 +41,18 @@ class TestValidateCertificateChain(TestCase):
         patched_x509store.set_time(self.x509store_time)
 
         try:
-            validate_certificate_chain(
+            result = validate_certificate_chain(
                 x5c=apple_x5c_certs,
                 pem_root_certs_bytes=[apple_webauthn_root_ca],
             )
         except Exception as err:
             print(err)
             self.fail("validate_certificate_chain failed when it should have succeeded")
+
+        self.assertTrue(result.trust_root_verified)
+        self.assertIsInstance(result.trust_root_fingerprint, str)
+        # SHA-256 fingerprint rendered as colon-separated uppercase hex
+        self.assertEqual(len(result.trust_root_fingerprint.split(":")), 32)
 
     @patch_validate_certificate_chain_x509store_getter
     def test_throws_on_bad_root_cert(self, patched_x509store: X509Store) -> None:
@@ -62,22 +67,29 @@ class TestValidateCertificateChain(TestCase):
 
     def test_passes_on_no_root_certs(self):
         try:
-            validate_certificate_chain(
+            result = validate_certificate_chain(
                 x5c=apple_x5c_certs,
             )
         except Exception as err:
             print(err)
             self.fail("validate_certificate_chain failed when it should have succeeded")
 
+        # No trust anchor was available, so a successful return must not claim root trust
+        self.assertFalse(result.trust_root_verified)
+        self.assertIsNone(result.trust_root_fingerprint)
+
     def test_passes_on_empty_root_certs_array(self):
         try:
-            validate_certificate_chain(
+            result = validate_certificate_chain(
                 x5c=apple_x5c_certs,
                 pem_root_certs_bytes=[],
             )
         except Exception as err:
             print(err)
             self.fail("validate_certificate_chain failed when it should have succeeded")
+
+        self.assertFalse(result.trust_root_verified)
+        self.assertIsNone(result.trust_root_fingerprint)
 
     def test_includes_original_exception_when_raising(self):
         """
@@ -117,11 +129,12 @@ class TestValidateCertificateChain(TestCase):
         patched_x509store.set_time(datetime(2026, 6, 11, 0, 0, 0))
 
         try:
-            validated = validate_certificate_chain(
+            result = validate_certificate_chain(
                 x5c=[urlsafe_b64decode(cert) for cert in x5c],
                 pem_root_certs_bytes=[google_hardware_attestation_root_4],
             )
-            self.assertTrue(validated)
+            self.assertTrue(result.trust_root_verified)
+            self.assertIsNotNone(result.trust_root_fingerprint)
         except Exception as err:
             print(err)
             self.fail("validate_certificate_chain failed when it should have succeeded")

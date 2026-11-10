@@ -18,6 +18,7 @@ from webauthn.helpers.exceptions import (
 from webauthn.helpers.known_root_certs import globalsign_root_ca
 from webauthn.helpers.structs import (
     AttestationFormat,
+    AttestationType,
     PublicKeyCredentialType,
 )
 from webauthn import verify_registration_response
@@ -54,6 +55,9 @@ class TestVerifyRegistrationResponse(TestCase):
         )
 
         assert verification.fmt == AttestationFormat.NONE
+        assert verification.attestation_type == AttestationType.NONE
+        assert verification.trust_root_verified is False
+        assert verification.trust_root_fingerprint is None
         assert verification.aaguid == "00000000-0000-0000-0000-000000000000"
         assert verification.credential_id == base64url_to_bytes(
             "9y1xA8Tmg1FEmT-c7_fvWZ_uoTuoih3OvR45_oAK-cwHWhAbXrl2q62iLVTjiyEZ7O7n-CROOY494k7Q3xrs_w"

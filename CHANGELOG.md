@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Changes:**
+
+- `verify_registration_response()` now reports the attestation trust it actually established instead of treating every successful response as equally trusted. `VerifiedRegistration` gains `attestation_type` (`none`/`self`/`basic`/`attca`), `trust_root_verified`, and `trust_root_fingerprint` (SHA-256 of the anchoring root). A successful certificate-chain check with no configured root no longer claims root trust.
+- Added an optional `attestation_policy` argument (`AttestationPolicy.ALLOW_NONE`, `ALLOW_SELF`, `REQUIRE_TRUSTED_ROOT`) that is enforced before registration completes. The default `ALLOW_NONE` preserves historical behavior.
+- Per-format root isolation is retained, and client-supplied x5c certificates can never act as additional trust roots. Format verifiers now return an `AttestationVerificationResult` rather than a bare `bool`.
+
 ## v3.0.1
 
 **Changes:**

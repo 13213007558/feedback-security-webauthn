@@ -11,6 +11,7 @@ from cryptography.x509 import (
 )
 
 from webauthn.helpers import (
+    attestation_type_from_chain,
     decode_credential_public_key,
     decoded_public_key_to_cryptography,
     parse_cbor,
@@ -21,7 +22,11 @@ from webauthn.helpers.exceptions import (
     InvalidRegistrationResponse,
 )
 from webauthn.helpers.known_root_certs import apple_webauthn_root_ca
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 
 
 def verify_apple(
@@ -31,7 +36,7 @@ def verify_apple(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
-) -> bool:
+) -> AttestationVerificationResult:
     """
     https://www.w3.org/TR/webauthn-2/#sctn-apple-anonymous-attestation
     """
@@ -41,10 +46,12 @@ def verify_apple(
 
     # Validate the certificate chain
     try:
-        # Include known root certificates for this attestation format
+        # Include known root certificates for this attestation format. Because the built-in
+        # Apple root is part of the store, a successful validation establishes attca trust
+        # against a configured trust anchor rather than merely basic attestation.
         pem_root_certs_bytes.append(apple_webauthn_root_ca)
 
-        validate_certificate_chain(
+        chain_validation: CertificateChainValidation = validate_certificate_chain(
             x5c=attestation_statement.x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
@@ -118,4 +125,8 @@ def verify_apple(
             "Certificate public key did not match credential public key (Apple)"
         )
 
-    return True
+    return AttestationVerificationResult(
+        attestation_type=attestation_type_from_chain(chain_validation),
+        trust_root_verified=chain_validation.trust_root_verified,
+        trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+    )

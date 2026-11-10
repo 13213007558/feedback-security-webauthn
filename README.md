@@ -55,6 +55,26 @@ You can also run these examples with the following:
 venv $> uv run -m examples.registration
 ```
 
+#### Attestation trust and policy
+
+Not every successful registration establishes the same level of device trust: a `"none"`
+attestation, self attestation, and a certificate chain that reaches a configured root are
+different situations. `verify_registration_response()` therefore reports the trust it actually
+verified on the returned object:
+
+- `attestation_type`: one of `none`, `self`, `basic` (certificate present but not anchored to a
+  configured root), or `attca` (chain verified against a configured/built-in root)
+- `trust_root_verified`: whether the attestation chain reached a trust root
+- `trust_root_fingerprint`: SHA-256 fingerprint of that root, or `None` when no root was verified
+
+Pass `attestation_policy` to enforce a minimum bar before registration completes. The default
+`AttestationPolicy.ALLOW_NONE` keeps the historical behavior; `ALLOW_SELF` rejects `"none"`
+attestation, and `REQUIRE_TRUSTED_ROOT` only accepts a chain anchored to a root configured via
+`pem_root_certs_bytes_by_fmt` (or built into the format). Roots remain isolated per format, and
+client-supplied x5c certificates can never become trust roots. See
+**examples/enterprise_attestation.py** for a call site that requires an enterprise-trusted
+device without inferring trust from the format name or handling exceptions specially.
+
 ### Authentication
 
 See **examples/authentication.py** for practical examples of using `generate_authentication_options()` and `verify_authentication_response()`.

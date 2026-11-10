@@ -5,7 +5,7 @@ from datetime import datetime
 from OpenSSL.crypto import X509Store
 
 from webauthn.helpers import parse_attestation_object, parse_registration_credential_json
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import AttestationStatement, AttestationType
 from webauthn.helpers.exceptions import InvalidRegistrationResponse
 from webauthn.registration.formats.android_safetynet import (
     verify_android_safetynet,
@@ -44,7 +44,7 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
         )
 
         # Test the verifier itself so we can activate its timestamp verification bypass
-        verified = verify_android_safetynet(
+        attestation_result = verify_android_safetynet(
             attestation_statement=parsed_attestation_object.att_stmt,
             attestation_object=credential.response.attestation_object,
             client_data_json=credential.response.client_data_json,
@@ -52,8 +52,12 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
             verify_timestamp_ms=False,
         )
 
-        assert verified is True
+        # The built-in GlobalSign root anchors the SafetyNet chain, so root trust is confirmed
+        assert attestation_result.attestation_type == AttestationType.ATT_CA
+        assert attestation_result.trust_root_verified is True
+        assert attestation_result.trust_root_fingerprint is not None
 
+    @patch("OpenSSL.crypto.X509StoreContext.get_verified_chain")
     @patch("OpenSSL.crypto.X509StoreContext.verify_certificate")
     @patch("base64.b64encode")
     @patch("cbor2.loads")
@@ -62,6 +66,7 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
         mock_cbor2_loads: MagicMock,
         mock_b64encode: MagicMock,
         mock_verify_certificate: MagicMock,
+        mock_get_verified_chain: MagicMock,
     ):
         """
         We're not working with a full WebAuthn response here so we have to mock out some values
@@ -71,6 +76,9 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
         mock_b64encode.return_value = "3N7YJmISsFM0cdvMAYcHcw==".encode("utf-8")
         # Cert chain validation is not important to this test
         mock_verify_certificate.return_value = True
+        mock_anchor = MagicMock()
+        mock_anchor.to_cryptography.return_value.fingerprint.return_value = bytes(32)
+        mock_get_verified_chain.return_value = [mock_anchor]
 
         # basicIntegrity: True, ctsProfileMatch: False
         jws_result_only_fail_cts_check = (
@@ -114,7 +122,7 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
             response=jws_result_only_fail_cts_check.encode("ascii"),
         )
 
-        verified = verify_android_safetynet(
+        attestation_result = verify_android_safetynet(
             attestation_statement=attestation_statement,
             attestation_object=bytes(),
             client_data_json=bytes(),
@@ -122,7 +130,8 @@ class TestVerifyRegistrationResponseAndroidSafetyNet(TestCase):
             verify_timestamp_ms=False,
         )
 
-        assert verified is True
+        assert attestation_result.attestation_type == AttestationType.ATT_CA
+        assert attestation_result.trust_root_verified is True
 
     @patch("OpenSSL.crypto.X509StoreContext.verify_certificate")
     @patch("base64.b64encode")

@@ -1,7 +1,7 @@
 from unittest import TestCase
 
 from webauthn.helpers import base64url_to_bytes
-from webauthn.helpers.structs import AttestationFormat
+from webauthn.helpers.structs import AttestationFormat, AttestationType
 from webauthn import verify_registration_response
 
 
@@ -38,6 +38,11 @@ class TestVerifyRegistrationResponsePacked(TestCase):
         assert verification.credential_id == base64url_to_bytes(
             "syGQPDZRUYdb4m3rdWeyPaIMYlbmydGp1TP_33vE_lqJ3PHNyTd0iKsnKr5WjnCcBzcesZrDEfB_RBLFzU3k4w"
         )
+        # An x5c chain with no configured root is structurally valid but not anchored, so it is
+        # basic attestation and must never be reported as a verified trust root
+        assert verification.attestation_type == AttestationType.BASIC
+        assert verification.trust_root_verified is False
+        assert verification.trust_root_fingerprint is None
 
     def test_verify_attestation_with_okp_public_key(self) -> None:
         credential = """{

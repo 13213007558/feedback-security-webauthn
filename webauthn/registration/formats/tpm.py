@@ -14,6 +14,7 @@ from cryptography.x509.extensions import ExtensionNotFound
 from cryptography.x509.oid import ExtensionOID
 
 from webauthn.helpers import (
+    attestation_type_from_chain,
     decode_credential_public_key,
     hash_by_alg,
     parse_cbor,
@@ -28,7 +29,11 @@ from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
     InvalidRegistrationResponse,
 )
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 from webauthn.helpers.tpm import map_tpm_manufacturer_id, parse_cert_info, parse_pub_area
 from webauthn.helpers.tpm.structs import (
     TPM_ALG_COSE_ALG_MAP,
@@ -45,7 +50,7 @@ def verify_tpm(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
-) -> bool:
+) -> AttestationVerificationResult:
     """Verify a "tpm" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-tpm-attestation
@@ -71,9 +76,10 @@ def verify_tpm(
             f'Attestation statement ver "{att_stmt_ver}" was not "2.0" (TPM)'
         )
 
-    # Validate the certificate chain
+    # Validate the certificate chain. With no configured root the chain cannot be anchored, so
+    # the returned flags distinguish basic attestation from attca trust.
     try:
-        validate_certificate_chain(
+        chain_validation: CertificateChainValidation = validate_certificate_chain(
             x5c=attestation_statement.x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
@@ -304,4 +310,8 @@ def verify_tpm(
     # except ExtensionNotFound:
     #     pass
 
-    return True
+    return AttestationVerificationResult(
+        attestation_type=attestation_type_from_chain(chain_validation),
+        trust_root_verified=chain_validation.trust_root_verified,
+        trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+    )

@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 
 from webauthn.helpers import (
     aaguid_to_string,
+    attestation_type_from_chain,
     validate_certificate_chain,
     verify_signature,
 )
@@ -22,7 +23,11 @@ from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
     InvalidRegistrationResponse,
 )
-from webauthn.helpers.structs import AttestationStatement
+from webauthn.helpers.structs import (
+    AttestationStatement,
+    AttestationVerificationResult,
+    CertificateChainValidation,
+)
 
 
 def verify_fido_u2f(
@@ -34,7 +39,7 @@ def verify_fido_u2f(
     credential_public_key: bytes,
     aaguid: bytes,
     pem_root_certs_bytes: List[bytes],
-) -> bool:
+) -> AttestationVerificationResult:
     """Verify a "fido-u2f" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-fido-u2f-attestation
@@ -52,9 +57,10 @@ def verify_fido_u2f(
             "Attestation statement contained too many certificates (FIDO-U2F)"
         )
 
-    # Validate the certificate chain
+    # Validate the certificate chain. Without a configured root this only confirms the
+    # statement's structure, so trust the result's own flags instead of the format name.
     try:
-        validate_certificate_chain(
+        chain_validation: CertificateChainValidation = validate_certificate_chain(
             x5c=attestation_statement.x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
         )
@@ -123,5 +129,8 @@ def verify_fido_u2f(
             "Could not verify attestation statement signature (FIDO-U2F)"
         )
 
-    # If we make it to here we're all good
-    return True
+    return AttestationVerificationResult(
+        attestation_type=attestation_type_from_chain(chain_validation),
+        trust_root_verified=chain_validation.trust_root_verified,
+        trust_root_fingerprint=chain_validation.trust_root_fingerprint,
+    )

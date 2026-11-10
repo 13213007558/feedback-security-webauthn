@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changes:**
+
+- `verify_authentication_response()` now accepts a `sign_count_policy` argument. The default `SignCountPolicy.STRICT` preserves the existing behavior of rejecting responses whose sign count fails to increase. `SignCountPolicy.REPORT` instead completes verification and exposes a `sign_count_assessment` on the returned `VerifiedAuthentication`, classifying the counter transition (`zero_to_zero`, `counting_started`, `normal_increment`, or `not_incremented`) so RPs can decide how to handle synced passkeys with unreliable counters. See `examples/authentication_sign_count_risk.py` for a usage example including safe concurrent counter updates
+
 ## v3.0.1
 
 **Changes:**

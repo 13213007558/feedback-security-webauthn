@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Union
 from cryptography.exceptions import InvalidSignature
 
 from webauthn.helpers import (
+    assess_sign_count,
     bytes_to_base64url,
     byteslike_to_bytes,
     decode_credential_public_key,
@@ -15,12 +16,14 @@ from webauthn.helpers import (
     parse_authentication_credential_json,
     verify_signature,
 )
+from webauthn.helpers.assess_sign_count import SignCountAssessment
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 from webauthn.helpers.structs import (
     AuthenticationCredential,
     ClientDataType,
     CredentialDeviceType,
     PublicKeyCredentialType,
+    SignCountPolicy,
     TokenBindingStatus,
 )
 
@@ -36,6 +39,7 @@ class VerifiedAuthentication:
     credential_device_type: CredentialDeviceType
     credential_backed_up: bool
     user_verified: bool
+    sign_count_assessment: SignCountAssessment
 
 
 expected_token_binding_statuses = [
@@ -53,6 +57,7 @@ def verify_authentication_response(
     credential_public_key: bytes,
     credential_current_sign_count: int,
     require_user_verification: bool = False,
+    sign_count_policy: SignCountPolicy = SignCountPolicy.STRICT,
 ) -> VerifiedAuthentication:
     """Verify a response from navigator.credentials.get()
 
@@ -71,6 +76,11 @@ def verify_authentication_response(
           used.
         - (optional) `require_user_verification`: Whether or not to require that the authenticator
           verified the user.
+        - (optional) `sign_count_policy`: How to treat a sign count that fails to increase.
+          `SignCountPolicy.STRICT` (default) rejects such responses, while
+          `SignCountPolicy.REPORT` completes verification and describes the counter
+          transition in `VerifiedAuthentication.sign_count_assessment` so the RP can
+          decide how to proceed (useful for synced passkeys).
 
     Returns:
         Information about the authenticator
@@ -155,7 +165,7 @@ def verify_authentication_response(
             "User verification is required but user was not verified during authentication"
         )
 
-    if (
+    if sign_count_policy == SignCountPolicy.STRICT and (
         auth_data.sign_count > 0 or credential_current_sign_count > 0
     ) and auth_data.sign_count <= credential_current_sign_count:
         # Require the sign count to have been incremented over what was reported by the
@@ -186,10 +196,21 @@ def verify_authentication_response(
 
     parsed_backup_flags = parse_backup_flags(auth_data.flags)
 
+    # The response has passed every verification check above, so the assessment below
+    # describes verified evidence. The RP remains responsible for persisting the new
+    # count (ideally with a conditional update that never moves the count backwards)
+    sign_count_assessment = assess_sign_count(
+        previous_sign_count=credential_current_sign_count,
+        new_sign_count=auth_data.sign_count,
+        credential_device_type=parsed_backup_flags.credential_device_type,
+        credential_backed_up=parsed_backup_flags.credential_backed_up,
+    )
+
     return VerifiedAuthentication(
         credential_id=credential.raw_id,
         new_sign_count=auth_data.sign_count,
         credential_device_type=parsed_backup_flags.credential_device_type,
         credential_backed_up=parsed_backup_flags.credential_backed_up,
         user_verified=auth_data.flags.uv,
+        sign_count_assessment=sign_count_assessment,
     )

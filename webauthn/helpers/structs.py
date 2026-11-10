@@ -554,3 +554,41 @@ class CredentialDeviceType(str, Enum):
 
     SINGLE_DEVICE = "single_device"
     MULTI_DEVICE = "multi_device"
+
+
+class SignCountPolicy(str, Enum):
+    """How authentication verification should treat a sign count that did not increase
+
+    Members:
+        `STRICT`: Reject the response when the sign count fails to increase (default,
+          appropriate for single-device credentials)
+        `REPORT`: Complete verification and report the counter transition as a risk
+          assessment on the result, so the RP can decide how to proceed (appropriate
+          for synced passkeys, whose counters are not guaranteed to increase)
+
+    https://w3c.github.io/webauthn/#sctn-sign-counter
+    """
+
+    STRICT = "strict"
+    REPORT = "report"
+
+
+class SignCountTransition(str, Enum):
+    """A classification of how a credential's sign count changed between authentications
+
+    Members:
+        `ZERO_TO_ZERO`: Both the stored and reported counts are zero; the authenticator
+          does not support a counter, so no counter-based signal is available
+        `COUNTING_STARTED`: The stored count is zero and the reported count is positive;
+          the authenticator began counting uses
+        `NORMAL_INCREMENT`: The reported count is greater than the stored count
+        `NOT_INCREMENTED`: The reported count failed to exceed a positive stored count;
+          potentially a cloned credential or a replayed response
+
+    https://w3c.github.io/webauthn/#sctn-sign-counter
+    """
+
+    ZERO_TO_ZERO = "zero_to_zero"
+    COUNTING_STARTED = "counting_started"
+    NORMAL_INCREMENT = "normal_increment"
+    NOT_INCREMENTED = "not_incremented"

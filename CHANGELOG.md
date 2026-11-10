@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changes:**
+
+- `verify_registration_response()` and `verify_authentication_response()` now accept an optional `strict` flag that enforces one set of structural constraints whether the credential arrives as a JSON string, a dict, or a constructed object. When enabled, duplicate keys in raw JSON (including nested objects, e.g. a repeated `origin` or `challenge`) are rejected before a dict is built, booleans such as `crossOrigin` must be real booleans, `id`/`rawId` must be equivalent, and `challenge` and binary fields are validated against their expected types and unpadded Base64URL encoding. Unknown/extension fields are retained and never override known fields, the original `clientDataJSON` bytes are preserved for signature calculation, and failures are raised as `InvalidRegistrationResponse`/`InvalidAuthenticationResponse` with a field-locating `StrictValidationError` cause. Default (non-strict) behavior is unchanged.
+
 ## v3.0.1
 
 **Changes:**

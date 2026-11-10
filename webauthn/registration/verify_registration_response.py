@@ -13,7 +13,11 @@ from webauthn.helpers import (
     parse_registration_credential_json,
 )
 from webauthn.helpers.cose import COSEAlgorithmIdentifier
-from webauthn.helpers.exceptions import InvalidRegistrationResponse
+from webauthn.helpers.exceptions import (
+    InvalidRegistrationResponse,
+    StrictValidationError,
+)
+from webauthn.helpers.strict import validate_registration_credential_object
 from webauthn.helpers.structs import (
     AttestationFormat,
     ClientDataType,
@@ -74,6 +78,7 @@ def verify_registration_response(
     require_user_verification: bool = False,
     supported_pub_key_algs: List[COSEAlgorithmIdentifier] = default_supported_pub_key_algs,
     pem_root_certs_bytes_by_fmt: Optional[Mapping[AttestationFormat, List[bytes]]] = None,
+    strict: bool = False,
 ) -> VerifiedRegistration:
     """Verify an authenticator's response to navigator.credentials.create()
 
@@ -94,6 +99,11 @@ def verify_registration_response(
           restrict support to. Defaults to all supported algorithm IDs.
         - (optional) `pem_root_certs_bytes_by_fmt`: A list of root certificates, in PEM format, to
           be used to validate the certificate chains for specific attestation statement formats.
+        - (optional) `strict`: Enforce a single set of strict structural constraints regardless of
+          whether `credential` arrives as a JSON string, dict, or constructed object. Raw JSON is
+          checked for duplicate keys (including nested), booleans are not coerced, and id/rawId,
+          challenge, and binary fields are type/encoding validated. Errors are raised as
+          `InvalidRegistrationResponse` with a field-locating `StrictValidationError` cause.
 
     Returns:
         Information about the authenticator and registration
@@ -102,7 +112,21 @@ def verify_registration_response(
         `helpers.exceptions.InvalidRegistrationResponse` if the response cannot be verified
     """
     if isinstance(credential, str) or isinstance(credential, dict):
-        credential = parse_registration_credential_json(credential)
+        try:
+            credential = parse_registration_credential_json(credential, strict=strict)
+        except StrictValidationError as exc:
+            raise InvalidRegistrationResponse(
+                "Credential failed strict validation. See __cause__ for more info"
+            ) from exc
+    elif strict:
+        # Constructed objects cannot reveal lost duplicate keys, but still get the equivalent type,
+        # required-field, and id/rawId consistency checks.
+        try:
+            validate_registration_credential_object(credential)
+        except StrictValidationError as exc:
+            raise InvalidRegistrationResponse(
+                "Credential failed strict validation. See __cause__ for more info"
+            ) from exc
 
     verified = False
 
@@ -122,7 +146,7 @@ def verify_registration_response(
     attestation_object_bytes = byteslike_to_bytes(response.attestation_object)
 
     try:
-        client_data = parse_client_data_json(client_data_bytes)
+        client_data = parse_client_data_json(client_data_bytes, strict=strict)
     except Exception as exc:
         raise InvalidRegistrationResponse(
             "clientDataJSON was malformed. See __cause__ for more info"

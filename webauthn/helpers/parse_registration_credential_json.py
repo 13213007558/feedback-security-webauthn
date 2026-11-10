@@ -4,6 +4,11 @@ from typing import Any, Dict, Union, Optional, List
 
 from .base64url_to_bytes import base64url_to_bytes
 from .exceptions import InvalidRegistrationResponse, InvalidJSONStructure
+from .strict import (
+    strict_base64url_to_bytes,
+    strict_json_loads,
+    validate_registration_credential_dict,
+)
 from .structs import (
     AuthenticatorAttachment,
     AuthenticatorAttestationResponse,
@@ -15,11 +20,20 @@ from .structs import (
 
 def parse_registration_credential_json(
     json_val: Union[str, Dict[str, Any]],
+    *,
+    strict: bool = False,
 ) -> RegistrationCredential:
     """
     Parse a JSON form of a registration credential, as either a stringified JSON object or a
-    plain dict, into an instance of RegistrationCredential
+    plain dict, into an instance of RegistrationCredential.
+
+    With `strict=True` raw JSON strings are decoded while rejecting duplicate keys (including in
+    nested objects), and both string and dict inputs undergo identical type, required-field,
+    Base64URL, and id/rawId consistency checks.
     """
+    if strict:
+        return _parse_strict(json_val)
+
     if isinstance(json_val, str):
         try:
             json_val = json.loads(json_val)
@@ -97,3 +111,39 @@ def parse_registration_credential_json(
         ) from exc
 
     return registration_credential
+
+
+def _parse_strict(json_val: Union[str, Dict[str, Any]]) -> RegistrationCredential:
+    # Duplicate keys are caught during decoding for raw JSON; dicts cannot recover them.
+    credential_dict = strict_json_loads(json_val)
+
+    # Same structural validation for both shapes.
+    validate_registration_credential_dict(credential_dict)
+
+    response = credential_dict["response"]
+
+    transports: Optional[List[AuthenticatorTransport]] = None
+    if response.get("transports") is not None:
+        transports = [AuthenticatorTransport(val) for val in response["transports"]]
+
+    attachment = credential_dict.get("authenticatorAttachment")
+    authenticator_attachment: Optional[AuthenticatorAttachment] = (
+        AuthenticatorAttachment(attachment) if attachment is not None else None
+    )
+
+    # The original clientDataJSON bytes are only decoded, never re-encoded.
+    return RegistrationCredential(
+        id=credential_dict["id"],
+        raw_id=strict_base64url_to_bytes(credential_dict["rawId"], "rawId"),
+        response=AuthenticatorAttestationResponse(
+            client_data_json=strict_base64url_to_bytes(
+                response["clientDataJSON"], "response.clientDataJSON"
+            ),
+            attestation_object=strict_base64url_to_bytes(
+                response["attestationObject"], "response.attestationObject"
+            ),
+            transports=transports,
+        ),
+        authenticator_attachment=authenticator_attachment,
+        type=PublicKeyCredentialType.PUBLIC_KEY,
+    )

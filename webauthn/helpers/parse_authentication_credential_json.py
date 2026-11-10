@@ -1,9 +1,14 @@
 import json
 from json.decoder import JSONDecodeError
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 from .exceptions import InvalidAuthenticationResponse, InvalidJSONStructure
 from .base64url_to_bytes import base64url_to_bytes
+from .strict import (
+    strict_base64url_to_bytes,
+    strict_json_loads,
+    validate_authentication_credential_dict,
+)
 from .structs import (
     AuthenticationCredential,
     AuthenticatorAssertionResponse,
@@ -14,11 +19,20 @@ from .structs import (
 
 def parse_authentication_credential_json(
     json_val: Union[str, Dict[str, Any]],
+    *,
+    strict: bool = False,
 ) -> AuthenticationCredential:
     """
     Parse a JSON form of an authentication credential, as either a stringified JSON object or a
-    plain dict, into an instance of AuthenticationCredential
+    plain dict, into an instance of AuthenticationCredential.
+
+    With `strict=True` the same structural constraints are enforced for both entry shapes: raw JSON
+    strings are checked for duplicate keys (including nested keys) while still being decoded, and
+    both shapes undergo identical type, required-field, Base64URL, and id/rawId consistency checks.
     """
+    if strict:
+        return _parse_strict(json_val)
+
     if isinstance(json_val, str):
         try:
             json_val = json.loads(json_val)
@@ -100,3 +114,48 @@ def parse_authentication_credential_json(
         ) from exc
 
     return authentication_credential
+
+
+def _parse_strict(
+    json_val: Union[str, Dict[str, Any]],
+) -> AuthenticationCredential:
+    # `strict_json_loads` raises on duplicate keys for raw JSON; a dict is returned as-is since its
+    # duplicates could no longer be recovered.
+    credential_dict = strict_json_loads(json_val)
+
+    # Equivalent type, required-field, encoding, and id/rawId consistency checks apply to both.
+    validate_authentication_credential_dict(credential_dict)
+
+    response = credential_dict["response"]
+
+    user_handle: Optional[bytes] = None
+    if response.get("userHandle") is not None:
+        user_handle = strict_base64url_to_bytes(
+            response["userHandle"], "response.userHandle"
+        )
+
+    attachment = credential_dict.get("authenticatorAttachment")
+    authenticator_attachment: Optional[AuthenticatorAttachment] = (
+        AuthenticatorAttachment(attachment) if attachment is not None else None
+    )
+
+    # Decode the Base64URL transport fields. The original clientDataJSON bytes are preserved
+    # verbatim (only decoded, never re-encoded) so signature calculation later uses exact bytes.
+    return AuthenticationCredential(
+        id=credential_dict["id"],
+        raw_id=strict_base64url_to_bytes(credential_dict["rawId"], "rawId"),
+        response=AuthenticatorAssertionResponse(
+            client_data_json=strict_base64url_to_bytes(
+                response["clientDataJSON"], "response.clientDataJSON"
+            ),
+            authenticator_data=strict_base64url_to_bytes(
+                response["authenticatorData"], "response.authenticatorData"
+            ),
+            signature=strict_base64url_to_bytes(
+                response["signature"], "response.signature"
+            ),
+            user_handle=user_handle,
+        ),
+        authenticator_attachment=authenticator_attachment,
+        type=PublicKeyCredentialType.PUBLIC_KEY,
+    )

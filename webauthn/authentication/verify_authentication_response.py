@@ -15,7 +15,11 @@ from webauthn.helpers import (
     parse_authentication_credential_json,
     verify_signature,
 )
-from webauthn.helpers.exceptions import InvalidAuthenticationResponse
+from webauthn.helpers.exceptions import (
+    InvalidAuthenticationResponse,
+    StrictValidationError,
+)
+from webauthn.helpers.strict import validate_authentication_credential_object
 from webauthn.helpers.structs import (
     AuthenticationCredential,
     ClientDataType,
@@ -53,6 +57,7 @@ def verify_authentication_response(
     credential_public_key: bytes,
     credential_current_sign_count: int,
     require_user_verification: bool = False,
+    strict: bool = False,
 ) -> VerifiedAuthentication:
     """Verify a response from navigator.credentials.get()
 
@@ -71,6 +76,11 @@ def verify_authentication_response(
           used.
         - (optional) `require_user_verification`: Whether or not to require that the authenticator
           verified the user.
+        - (optional) `strict`: Enforce a single set of strict structural constraints regardless of
+          whether `credential` arrives as a JSON string, dict, or constructed object. Raw JSON is
+          checked for duplicate keys (including nested), booleans are not coerced, and id/rawId,
+          challenge, and binary fields are type/encoding validated. Errors are raised as
+          `InvalidAuthenticationResponse` with a field-locating `StrictValidationError` cause.
 
     Returns:
         Information about the authenticator
@@ -79,7 +89,21 @@ def verify_authentication_response(
         `helpers.exceptions.InvalidAuthenticationResponse` if the response cannot be verified
     """
     if isinstance(credential, str) or isinstance(credential, dict):
-        credential = parse_authentication_credential_json(credential)
+        try:
+            credential = parse_authentication_credential_json(credential, strict=strict)
+        except StrictValidationError as exc:
+            raise InvalidAuthenticationResponse(
+                "Credential failed strict validation. See __cause__ for more info"
+            ) from exc
+    elif strict:
+        # Constructed objects cannot reveal lost duplicate keys, but still get the equivalent type,
+        # required-field, and id/rawId consistency checks.
+        try:
+            validate_authentication_credential_object(credential)
+        except StrictValidationError as exc:
+            raise InvalidAuthenticationResponse(
+                "Credential failed strict validation. See __cause__ for more info"
+            ) from exc
 
     # FIDO-specific check
     if bytes_to_base64url(credential.raw_id) != credential.id:
@@ -98,7 +122,7 @@ def verify_authentication_response(
     signature_bytes = byteslike_to_bytes(response.signature)
 
     try:
-        client_data = parse_client_data_json(client_data_bytes)
+        client_data = parse_client_data_json(client_data_bytes, strict=strict)
     except Exception as exc:
         raise InvalidAuthenticationResponse(
             "clientDataJSON was malformed. See __cause__ for more info"
